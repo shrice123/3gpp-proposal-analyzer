@@ -12,8 +12,10 @@ files:
   - scripts/generate-pptx.mjs
   - package.json
 extraResources:
-  - from: backend/dist/proposal-backend
-    to: backend/proposal-backend
+  - from: backend/dist
+    to: backend
+    filter:
+      - "proposal-backend*"
   - from: runtime-bundle/manifest.json
     to: runtime-bundle/manifest.json
 mac:
