@@ -60,20 +60,10 @@ jobs:
           cp backend/dist/proposal-backend.exe "$PORTABLE/"
           cp start.bat "$PORTABLE/"
           cp serve.ps1 "$PORTABLE/"
-          7z a "release/${PORTABLE}.zip" "$PORTABLE" > /dev/null
+          7z a "$PORTABLE.zip" "$PORTABLE" > /dev/null
           rm -rf "$PORTABLE"
-      - name: Build online installer
-        if: ${{ github.event_name == 'push' || inputs.release_kind == 'online' || inputs.release_kind == 'both' }}
-        run: npx electron-builder --config electron-builder.online.yml --${{ matrix.arch }} --publish never
-      - name: Build offline installer
-        if: ${{ github.event_name == 'push' || inputs.release_kind == 'offline' || inputs.release_kind == 'both' }}
-        run: npx electron-builder --config electron-builder.offline.yml --${{ matrix.arch }} --publish never
       - uses: actions/upload-artifact@v4
         with:
-          name: installers-${{ matrix.os }}-${{ matrix.arch }}
-          path: |
-            release/*.exe
-            release/*.zip
-            release/*.blockmap
-            release/*.yml
+          name: portable-windows-x64
+          path: "*.zip"
           if-no-files-found: error
