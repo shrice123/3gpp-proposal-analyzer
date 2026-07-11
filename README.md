@@ -2,6 +2,28 @@
 
 一个本地优先的桌面工具，用于导入 3GPP 会议目录、按多个 agenda 和母公司归组后的首个 source 筛选提案、打包下载原始 ZIP、后台预处理 Word/PPT/PDF/Excel 文稿、进行带出处的问答，并在对话中生成 Word 或 PowerPoint 报告。提案详情和导出文件仍保留完整的同签来源。
 
+## 下载安装
+
+从 [Releases](https://github.com/shrice123/3gpp-proposal-analyzer/releases) 页面下载最新版本：
+
+| 文件 | 平台 | 说明 |
+|------|------|------|
+| `3GPP-Proposal-Analyzer-Online-*-mac-arm64.dmg` | macOS (Apple Silicon) | 安装包，内置 Electron 桌面壳 |
+| `3GPP-Proposal-Analyzer-Online-*-win-x64.exe` | Windows x64 | 安装包，需联网获取文档转换组件 |
+| `3GPP-Proposal-Analyzer-Offline-*-win-x64.exe` | Windows x64 | 安装包，内置全部运行组件，适合离线环境 |
+| `3GPP-Proposal-Analyzer-Portable-Windows-x64.zip` | Windows x64 | ⚡ 免安装便携版，解压双击 `start.bat` 即用 |
+
+> 国内下载慢？把链接中 `github.com` 替换为 `ghproxy.com/https://github.com/...` 即可加速。
+
+### 便携版使用
+
+1. 解压 ZIP 到任意文件夹
+2. 双击 `start.bat`
+3. 等待终端显示「Backend ready」→ 浏览器自动打开 `http://localhost:3000`
+4. 关闭命令行窗口即停止所有服务
+
+> 便携版无需 Python，使用 Windows 自带的 PowerShell 提供前端服务。
+
 ## 给普通用户
 
 普通用户不需要 Docker、Python、Node.js 或命令行。
