@@ -60,8 +60,12 @@ jobs:
           cp backend/dist/proposal-backend.exe "$PORTABLE/"
           cp start.bat "$PORTABLE/"
           cp serve.ps1 "$PORTABLE/"
-          7z a "$PORTABLE.zip" "$PORTABLE" > /dev/null
+          7z a "release/${PORTABLE}.zip" "$PORTABLE" > /dev/null
           rm -rf "$PORTABLE"
+      - name: Build online installer
+        run: npx electron-builder --config electron-builder.online.yml --${{ matrix.arch }} --publish never
+      - name: Build offline installer
+        run: npx electron-builder --config electron-builder.offline.yml --${{ matrix.arch }} --publish never
       - uses: actions/upload-artifact@v4
         with:
           name: portable-windows-x64
@@ -69,4 +73,8 @@ jobs:
           if-no-files-found: error
       - uses: softprops/action-gh-release@v2
         with:
-          files: "*.zip"
+          files: |
+            release/*.exe
+            release/*.zip
+            release/*.blockmap
+            release/*.yml
