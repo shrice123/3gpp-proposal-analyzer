@@ -20,10 +20,6 @@ jobs:
         include:
           - os: windows-latest
             arch: x64
-          - os: macos-13
-            arch: x64
-          - os: macos-14
-            arch: arm64
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
