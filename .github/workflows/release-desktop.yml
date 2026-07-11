@@ -71,5 +71,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: installers-${{ matrix.os }}-${{ matrix.arch }}
-          path: release/*
+          path: |
+            release/*.exe
+            release/*.zip
+            release/*.blockmap
+            release/*.yml
           if-no-files-found: error
