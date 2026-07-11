@@ -160,7 +160,7 @@ jobs:
           for kind in Online Offline; do
             dmg="release/3GPP-Proposal-Analyzer-${kind}-${version}-mac-arm64.dmg"
             test -f "$dmg"
-            mount_point="$(hdiutil attach -plist -nobrowse -readonly "$dmg" | python -c 'import plistlib, sys; data = plistlib.load(sys.stdin.buffer); print(next(item["mount-point"] for item in data["system-entities"] if item.get("mount-point")))')"
+            mount_point="$(hdiutil attach -plist -nobrowse -readonly "$dmg" | python -c 'import plistlib, sys; data = plistlib.loads(sys.stdin.buffer.read()); print(next(item["mount-point"] for item in data["system-entities"] if item.get("mount-point")))')"
             app="$mount_point/3GPP Proposal Analyzer.app"
             test -f "$app/Contents/Resources/backend/proposal-backend"
             test -f "$app/Contents/Resources/app.asar"
