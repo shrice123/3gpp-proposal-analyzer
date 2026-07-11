@@ -3,7 +3,7 @@
   "productName": "3GPP Proposal Analyzer",
   "description": "Local-first 3GPP proposal download, background preparation, analysis, chat and reporting desktop app.",
   "author": "Proposal Insight",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "private": true,
   "main": "desktop/main.cjs",
   "engines": {
