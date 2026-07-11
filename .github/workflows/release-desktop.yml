@@ -99,29 +99,37 @@ jobs:
             }
           }
 
-          $env:PROPOSAL_TOOL_PORT = "8765"
-          $backend = Start-Process `
-            -FilePath (Join-Path $extract "proposal-backend.exe") `
+          $env:PROPOSAL_TOOL_DATA_DIR = Join-Path $env:RUNNER_TEMP "portable-data"
+          $launcher = Start-Process `
+            -FilePath $env:ComSpec `
+            -ArgumentList @("/d", "/c", "start.bat") `
             -WorkingDirectory $extract `
             -PassThru `
             -WindowStyle Hidden
           try {
             $health = $null
+            $frontend = $null
             for ($attempt = 1; $attempt -le 60; $attempt++) {
               try {
                 $health = Invoke-RestMethod "http://127.0.0.1:8765/api/health" -TimeoutSec 2
-                if ($health.ok -eq $true) { break }
               } catch {
-                Start-Sleep -Seconds 1
+                $health = $null
               }
+              try {
+                $frontend = Invoke-WebRequest "http://127.0.0.1:3000/" -UseBasicParsing -TimeoutSec 2
+              } catch {
+                $frontend = $null
+              }
+              if ($health.ok -eq $true -and $frontend.StatusCode -eq 200) { break }
+              Start-Sleep -Seconds 1
             }
-            if ($null -eq $health -or $health.ok -ne $true) {
-              throw "Portable backend did not become healthy within 60 seconds"
+            if ($null -eq $health -or $health.ok -ne $true -or $null -eq $frontend -or $frontend.StatusCode -ne 200) {
+              throw "Portable start.bat did not start both backend and frontend within 60 seconds"
             }
-            Write-Host "Portable backend smoke test passed: version=$($health.version)"
+            Write-Host "Portable start.bat smoke test passed: version=$($health.version)"
           } finally {
-            if ($backend -and -not $backend.HasExited) {
-              Stop-Process -Id $backend.Id -Force
+            if ($launcher -and -not $launcher.HasExited) {
+              taskkill.exe /PID $launcher.Id /T /F | Out-Null
             }
           }
       - name: Build online installer
