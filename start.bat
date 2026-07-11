@@ -1,67 +1,87 @@
 @echo off
-chcp 65001 >nul
+chcp 65001 >nul 2>&1
 setlocal enabledelayedexpansion
 title 3GPP Proposal Analyzer
 
 set DIR=%~dp0
 set BACKEND=%DIR%proposal-backend.exe
-set VENV_PYTHON=%DIR%venv\Scripts\python.exe
 set FRONTEND=%DIR%desktop-dist
 set PORT_BACKEND=8765
 set PORT_FRONTEND=3000
 
-echo ══════════════════════════════════════
-echo   3GPP Proposal Analyzer — Portable
-echo ══════════════════════════════════════
+echo =========================================
+echo   3GPP Proposal Analyzer - Portable
+echo =========================================
 echo.
 
-:: Try standalone binary first, fall back to venv
-if exist "%BACKEND%" (
-    echo Starting backend (standalone)...
-    start /B "" "%BACKEND%" >nul 2>&1
-    set USE_BINARY=1
-) else if exist "%VENV_PYTHON%" (
-    echo Starting backend (venv)...
-    start /B "" "%VENV_PYTHON%" "%DIR%backend\run.py" >nul 2>&1
-    set USE_BINARY=0
-) else (
-    echo [ERROR] No backend found.
-    echo   Place proposal-backend.exe in this folder, OR
-    echo   Run: python -m venv venv ^&^& venv\Scripts\pip install -r requirements.txt
+:: Check files exist
+if not exist "%BACKEND%" (
+    echo [ERROR] proposal-backend.exe not found
+    echo   Place it in: %DIR%
+    pause
+    exit /b 1
+)
+if not exist "%FRONTEND%\index.html" (
+    echo [ERROR] desktop-dist folder missing or incomplete
+    echo   Expected: %FRONTEND%
     pause
     exit /b 1
 )
 
-:: Wait for backend
-echo Waiting for backend...
+:: Kill any existing backend on the same port
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":%PORT_BACKEND%" ^| findstr "LISTENING" 2^>nul') do (
+    echo Cleaning up existing process on port %PORT_BACKEND% ^(PID %%a^)...
+    taskkill /PID %%a /F >nul 2>&1
+)
+
+:: Start backend
+echo Starting backend...
+start "ProposalBackend" "%BACKEND%"
+echo Waiting for backend to be ready...
+
 for /L %%i in (1,1,30) do (
     curl -s http://127.0.0.1:%PORT_BACKEND%/api/health >nul 2>&1
     if !errorlevel! == 0 goto backend_ready
     timeout /t 1 /nobreak >nul
 )
-echo [ERROR] Backend failed to start
+
+echo.
+echo [ERROR] Backend failed to start after 30s.
+echo   Check if proposal-backend.exe crashed. Try running it manually:
+echo   "%BACKEND%"
+echo.
 pause
 exit /b 1
 
 :backend_ready
-echo Backend ready
+echo Backend ready ^(port %PORT_BACKEND%^)
 
-:: Start frontend server — try Python first, fall back to PowerShell
+:: Start frontend
 where python >nul 2>&1
 if %errorlevel% == 0 (
-    echo Starting frontend (Python)...
+    echo Starting frontend with Python...
     start /B "" python -m http.server %PORT_FRONTEND% --bind 127.0.0.1 --directory "%FRONTEND%" >nul 2>&1
 ) else (
-    echo Starting frontend (PowerShell)...
-    start /B "" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0serve.ps1" "%FRONTEND%" %PORT_FRONTEND% >nul 2>&1
+    echo Starting frontend with PowerShell...
+    if not exist "%DIR%serve.ps1" (
+        echo [ERROR] serve.ps1 not found
+        pause
+        exit /b 1
+    )
+    start /B "" powershell -NoProfile -ExecutionPolicy Bypass -File "%DIR%serve.ps1" "%FRONTEND%" %PORT_FRONTEND% >nul 2>&1
 )
 
-echo.
-echo   Open in browser: http://localhost:%PORT_FRONTEND%
-echo   Close this window to stop all services.
-echo.
+:: Open browser
+echo Opening browser...
+start http://localhost:%PORT_FRONTEND%
 
-:: Keep window open and handle exit
+echo.
+echo =========================================
+echo   Ready!  http://localhost:%PORT_FRONTEND%
+echo   Close this window to stop all services.
+echo =========================================
+
+:: Keep alive
 :loop
-timeout /t 2 /nobreak >nul
+timeout /t 5 /nobreak >nul
 goto loop
