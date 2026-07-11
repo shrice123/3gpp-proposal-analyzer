@@ -1,0 +1,36 @@
+appId: com.proposalinsight.3gpp
+productName: 3GPP Proposal Analyzer
+artifactName: 3GPP-Proposal-Analyzer-Online-${version}-${os}-${arch}.${ext}
+directories:
+  output: release
+asar: true
+files:
+  - desktop-dist/**/*
+  - desktop/main.cjs
+  - desktop/preload.cjs
+  - desktop/runtime-manager.cjs
+  - scripts/generate-pptx.mjs
+  - package.json
+extraResources:
+  - from: backend/dist/proposal-backend
+    to: backend/proposal-backend
+  - from: runtime-bundle/manifest.json
+    to: runtime-bundle/manifest.json
+mac:
+  target:
+    - target: dmg
+  category: public.app-category.productivity
+  hardenedRuntime: true
+  gatekeeperAssess: false
+win:
+  target:
+    - target: nsis
+  requestedExecutionLevel: asInvoker
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+publish:
+  provider: generic
+  url: ${env.PROPOSAL_UPDATE_URL}

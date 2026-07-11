@@ -1,0 +1,10 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+httpx==0.28.1
+openpyxl==3.1.5
+python-multipart==0.0.20
+cryptography==45.0.5
+python-docx==1.2.0
+pypdf==5.8.0
+pyinstaller==6.15.0
+

@@ -1,0 +1,5 @@
+<svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="2" y="2" width="44" height="44" rx="8" fill="#102A3A"/>
+  <path d="M7 35H41" stroke="#21A4B2" stroke-width="2"/>
+  <text x="24" y="27.5" fill="#F4FBFB" font-family="Arial, sans-serif" font-size="11" font-weight="700" text-anchor="middle">3GPP</text>
+</svg>
