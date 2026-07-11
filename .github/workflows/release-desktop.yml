@@ -4,11 +4,21 @@ on:
   workflow_dispatch:
     inputs:
       release_kind:
-        description: Installer kind
+        description: Artifact kind
         required: true
         type: choice
-        options: [online, offline, both]
-        default: both
+        options: [portable, online, offline, both]
+        default: portable
+      publish_release:
+        description: Publish selected artifacts to a GitHub Release
+        required: true
+        type: boolean
+        default: false
+      release_tag:
+        description: Tag to use when publishing a manually triggered release
+        required: false
+        type: string
+        default: v0.3.1
   push:
     tags: ["v*"]
 
@@ -52,27 +62,86 @@ jobs:
         working-directory: backend
         run: pyinstaller --clean proposal-backend.spec
       - name: Build portable ZIP
-        shell: bash
+        if: ${{ github.event_name == 'push' || inputs.release_kind == 'portable' || inputs.release_kind == 'both' }}
+        shell: pwsh
         run: |
-          PORTABLE="3GPP-Proposal-Analyzer-Portable-Windows-x64"
-          mkdir -p "$PORTABLE"
-          cp -r desktop-dist "$PORTABLE/"
-          cp backend/dist/proposal-backend.exe "$PORTABLE/"
-          cp start.bat "$PORTABLE/"
-          cp serve.ps1 "$PORTABLE/"
-          7z a "release/${PORTABLE}.zip" "$PORTABLE" > /dev/null
-          rm -rf "$PORTABLE"
+          $portable = "3GPP-Proposal-Analyzer-Portable-Windows-x64"
+          $staging = Join-Path $env:RUNNER_TEMP $portable
+
+          New-Item -ItemType Directory -Force -Path $staging | Out-Null
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Copy-Item -Recurse -Force desktop-dist (Join-Path $staging "desktop-dist")
+          Copy-Item -Force backend/dist/proposal-backend.exe (Join-Path $staging "proposal-backend.exe")
+          Copy-Item -Force start.bat (Join-Path $staging "start.bat")
+          Copy-Item -Force serve.ps1 (Join-Path $staging "serve.ps1")
+          Compress-Archive -Path (Join-Path $staging "*") -DestinationPath "release\$portable.zip" -Force
+          Remove-Item -Recurse -Force $staging
+      - name: Smoke test portable ZIP
+        if: ${{ github.event_name == 'push' || inputs.release_kind == 'portable' || inputs.release_kind == 'both' }}
+        shell: pwsh
+        run: |
+          $portable = "3GPP-Proposal-Analyzer-Portable-Windows-x64"
+          $zip = Join-Path $PWD "release\$portable.zip"
+          $extract = Join-Path $env:RUNNER_TEMP "portable-smoke"
+          if (Test-Path $extract) { Remove-Item -Recurse -Force $extract }
+          Expand-Archive -Path $zip -DestinationPath $extract -Force
+
+          $required = @(
+            "proposal-backend.exe",
+            "desktop-dist\index.html",
+            "start.bat",
+            "serve.ps1"
+          )
+          foreach ($relativePath in $required) {
+            $candidate = Join-Path $extract $relativePath
+            if (-not (Test-Path $candidate -PathType Leaf)) {
+              throw "Portable package is missing: $relativePath"
+            }
+          }
+
+          $env:PROPOSAL_TOOL_PORT = "8765"
+          $backend = Start-Process `
+            -FilePath (Join-Path $extract "proposal-backend.exe") `
+            -WorkingDirectory $extract `
+            -PassThru `
+            -WindowStyle Hidden
+          try {
+            $health = $null
+            for ($attempt = 1; $attempt -le 60; $attempt++) {
+              try {
+                $health = Invoke-RestMethod "http://127.0.0.1:8765/api/health" -TimeoutSec 2
+                if ($health.ok -eq $true) { break }
+              } catch {
+                Start-Sleep -Seconds 1
+              }
+            }
+            if ($null -eq $health -or $health.ok -ne $true) {
+              throw "Portable backend did not become healthy within 60 seconds"
+            }
+            Write-Host "Portable backend smoke test passed: version=$($health.version)"
+          } finally {
+            if ($backend -and -not $backend.HasExited) {
+              Stop-Process -Id $backend.Id -Force
+            }
+          }
       - name: Build online installer
+        if: ${{ github.event_name == 'push' || inputs.release_kind == 'online' || inputs.release_kind == 'both' }}
         run: npx electron-builder --config electron-builder.online.yml --${{ matrix.arch }} --publish never
       - name: Build offline installer
+        if: ${{ github.event_name == 'push' || inputs.release_kind == 'offline' || inputs.release_kind == 'both' }}
         run: npx electron-builder --config electron-builder.offline.yml --${{ matrix.arch }} --publish never
       - uses: actions/upload-artifact@v4
         with:
-          name: portable-windows-x64
-          path: release/*.zip
+          name: desktop-windows-${{ inputs.release_kind || 'tagged' }}
+          path: release/*
           if-no-files-found: error
-      - uses: softprops/action-gh-release@v2
+      - name: Publish GitHub Release
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_release) }}
+        uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
           files: |
             release/*.exe
             release/*.zip
