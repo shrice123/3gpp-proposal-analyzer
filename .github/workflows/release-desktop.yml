@@ -51,6 +51,17 @@ jobs:
       - name: Build backend sidecar
         working-directory: backend
         run: pyinstaller --clean proposal-backend.spec
+      - name: Build portable ZIP
+        shell: bash
+        run: |
+          PORTABLE="3GPP-Proposal-Analyzer-Portable-Windows-x64"
+          mkdir -p "$PORTABLE"
+          cp -r desktop-dist "$PORTABLE/"
+          cp backend/dist/proposal-backend.exe "$PORTABLE/"
+          cp start.bat "$PORTABLE/"
+          cp serve.ps1 "$PORTABLE/"
+          7z a "release/${PORTABLE}.zip" "$PORTABLE" > /dev/null
+          rm -rf "$PORTABLE"
       - name: Build online installer
         if: ${{ github.event_name == 'push' || inputs.release_kind == 'online' || inputs.release_kind == 'both' }}
         run: npx electron-builder --config electron-builder.online.yml --${{ matrix.arch }} --publish never

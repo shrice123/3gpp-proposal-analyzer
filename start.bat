@@ -46,9 +46,15 @@ exit /b 1
 :backend_ready
 echo Backend ready
 
-:: Start frontend server
-echo Starting frontend...
-start /B "" python -m http.server %PORT_FRONTEND% --bind 127.0.0.1 --directory "%FRONTEND%" >nul 2>&1
+:: Start frontend server — try Python first, fall back to PowerShell
+where python >nul 2>&1
+if %errorlevel% == 0 (
+    echo Starting frontend (Python)...
+    start /B "" python -m http.server %PORT_FRONTEND% --bind 127.0.0.1 --directory "%FRONTEND%" >nul 2>&1
+) else (
+    echo Starting frontend (PowerShell)...
+    start /B "" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0serve.ps1" "%FRONTEND%" %PORT_FRONTEND% >nul 2>&1
+)
 
 echo.
 echo   Open in browser: http://localhost:%PORT_FRONTEND%
