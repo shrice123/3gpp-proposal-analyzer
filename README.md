@@ -9,8 +9,9 @@
 | 文件 | 平台 | 说明 |
 |------|------|------|
 | `3GPP-Proposal-Analyzer-Online-*-mac-arm64.dmg` | macOS (Apple Silicon) | 安装包，内置 Electron 桌面壳 |
+| `3GPP-Proposal-Analyzer-Offline-*-mac-arm64.dmg` | macOS (Apple Silicon) | 离线安装包，内置当前 runtime-bundle |
 | `3GPP-Proposal-Analyzer-Online-*-win-x64.exe` | Windows x64 | 安装包，需联网获取文档转换组件 |
-| `3GPP-Proposal-Analyzer-Offline-*-win-x64.exe` | Windows x64 | 安装包，内置全部运行组件，适合离线环境 |
+| `3GPP-Proposal-Analyzer-Offline-*-win-x64.exe` | Windows x64 | 离线安装包，内置当前 runtime-bundle |
 | `3GPP-Proposal-Analyzer-Portable-Windows-x64.zip` | Windows x64 | ⚡ 免安装便携版，解压双击 `start.bat` 即用 |
 
 > 国内下载慢？把链接中 `github.com` 替换为 `ghproxy.com/https://github.com/...` 即可加速。
@@ -39,7 +40,7 @@
 
 对话支持多个独立会话、会话级模型选择、实时流式回答和一键终止。普通大范围问题默认采用自适应证据检索；报告、逐篇分析和明确要求全面覆盖的问题自动使用全量分析。报告会同时使用当前会话历史和提案证据。
 
-在线安装包在首次运行时获取文档转换和 OCR 组件；离线安装包内置这些运行组件，适合网络受限环境。生产安装包需要发布方提供签名和经过 SHA-256 校验的运行组件清单。
+在线安装包在首次运行时获取文档转换和 OCR 组件。当前仓库的 `runtime-bundle/` 仅包含 manifest 和说明文件，因此离线安装包会按离线结构打包，但实际转换/OCR组件仍可能需要下载。生产安装包需要发布方提供签名和经过 SHA-256 校验的运行组件清单。
 
 ## 开发与验证
 
@@ -74,7 +75,7 @@ npm run build:backend
 npm run build:desktop
 ```
 
-macOS 的 Intel 与 Apple Silicon 安装包、Windows x64 安装包由 GitHub Actions 在对应系统上分别构建。在线版配置见 `electron-builder.online.yml`，离线版配置见 `electron-builder.offline.yml`。
+macOS Apple Silicon arm64 与 Windows x64 安装包由 GitHub Actions 在对应系统上分别构建。在线版配置见 `electron-builder.online.yml`，离线版配置见 `electron-builder.offline.yml`。
 
 ### 测试
 
