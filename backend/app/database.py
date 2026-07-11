@@ -56,6 +56,13 @@ CREATE TABLE IF NOT EXISTS proposals (
   status TEXT NOT NULL DEFAULT '',
   abstract TEXT NOT NULL DEFAULT '',
   zip_url TEXT NOT NULL,
+  file_url TEXT NOT NULL DEFAULT '',
+  file_name TEXT NOT NULL DEFAULT '',
+  file_kind TEXT NOT NULL DEFAULT 'zip',
+  file_size INTEGER,
+  file_modified TEXT,
+  metadata_source TEXT NOT NULL DEFAULT 'index',
+  analyzable INTEGER NOT NULL DEFAULT 1,
   download_state TEXT NOT NULL DEFAULT 'idle',
   analysis_state TEXT NOT NULL DEFAULT 'idle',
   preparation_state TEXT NOT NULL DEFAULT 'idle',
@@ -379,6 +386,19 @@ class Database:
                 connection.execute("ALTER TABLE proposals ADD COLUMN preparation_error TEXT")
             if "canonical_source" not in proposal_columns:
                 connection.execute("ALTER TABLE proposals ADD COLUMN canonical_source TEXT NOT NULL DEFAULT 'Unknown'")
+            for name, definition in (
+                ("file_url", "TEXT NOT NULL DEFAULT ''"),
+                ("file_name", "TEXT NOT NULL DEFAULT ''"),
+                ("file_kind", "TEXT NOT NULL DEFAULT 'zip'"),
+                ("file_size", "INTEGER"),
+                ("file_modified", "TEXT"),
+                ("metadata_source", "TEXT NOT NULL DEFAULT 'index'"),
+                ("analyzable", "INTEGER NOT NULL DEFAULT 1"),
+            ):
+                if name not in proposal_columns:
+                    connection.execute(f"ALTER TABLE proposals ADD COLUMN {name} {definition}")
+            connection.execute("UPDATE proposals SET file_url=zip_url WHERE file_url='' OR file_url IS NULL")
+            connection.execute("UPDATE proposals SET file_name=tdoc||'.zip' WHERE file_name='' OR file_name IS NULL")
             preparation_columns = {row[1] for row in connection.execute("PRAGMA table_info(preparations)").fetchall()}
             for name, definition in (
                 ("visual_evidence_json", "TEXT NOT NULL DEFAULT '[]'"),

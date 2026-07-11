@@ -79,6 +79,12 @@ button:active:not(:disabled), a:active { transform: translateY(1px); }
 .proposal-pane { min-width: 0; border-right: 1px solid var(--line); display: flex; flex-direction: column; }
 .mobile-scope-header, .mobile-scope-toggle, .scope-backdrop { display: none; }
 .filter-bar { display: grid; grid-template-columns: 1fr 1.35fr .8fr; gap: 10px; padding: 12px; background: var(--surface-2); border-bottom: 1px solid var(--line); align-items: end; }
+.ftp-breadcrumbs { min-height: 38px; display: flex; align-items: center; gap: 5px; overflow-x: auto; padding: 7px 12px; border-bottom: 1px solid var(--line); background: var(--surface); white-space: nowrap; font-size: 10px; }
+.ftp-breadcrumbs span { display: inline-flex; align-items: center; gap: 5px; }
+.ftp-breadcrumbs i { color: var(--muted); font-style: normal; }
+.ftp-breadcrumbs button { border: 0; background: transparent; padding: 3px 2px; color: var(--accent-dark); cursor: pointer; }
+.ftp-breadcrumbs b { padding: 3px 2px; }
+.file-type-filter select { width: 100%; height: 38px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface); padding: 0 9px; }
 .filter-bar label, .report-settings-panel label, .control-card label { display: block; color: var(--muted); font-size: 11px; font-weight: 600; margin-bottom: 5px; }
 .filter-bar input, .control-card input, .control-card select, .report-settings-panel select { width: 100%; height: 38px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: var(--radius-control); padding: 0 10px; font-size: 12px; }
 .filter-bar .cds--list-box { border-radius: var(--radius-control); border-color: var(--line); background: var(--surface); }
@@ -91,6 +97,14 @@ button:active:not(:disabled), a:active { transform: translateY(1px); }
 .proposal-row { display: grid; grid-template-columns: 34px minmax(0,1fr) 108px; align-items: start; padding: 12px 13px; border-bottom: 1px solid #e2e8eb; transition: background .12s; }
 .proposal-row:hover { background: #f1f6f7; }
 .proposal-row.selected { background: #e7f2f3; box-shadow: inset 3px 0 var(--accent); }
+.folder-row, .plain-file-row { min-height: 56px; display: grid; grid-template-columns: 34px minmax(0,1fr) 76px; align-items: center; gap: 0; padding: 8px 13px; border-bottom: 1px solid #e2e8eb; }
+.folder-row > svg { color: #c28a22; }
+.folder-row > button { min-width: 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.folder-row strong, .folder-row small, .plain-file-row strong, .plain-file-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-row small, .plain-file-row small, .folder-row > span { margin-top: 3px; color: var(--muted); font-size: 9px; }
+.plain-file-row > svg { color: var(--muted); }
+.plain-file-row a { color: var(--accent-dark); font-size: 10px; text-decoration: none; text-align: right; }
+.proposal-main:disabled, .checkbox:disabled { cursor: not-allowed; opacity: .55; }
 .proposal-main { min-width: 0; text-align: left; border: 0; background: transparent; padding: 0 12px 0 0; cursor: pointer; }
 .proposal-meta { display: flex; gap: 6px; align-items: center; }
 .proposal-meta b { color: var(--accent-dark); font: 600 10px "IBM Plex Mono", monospace; }

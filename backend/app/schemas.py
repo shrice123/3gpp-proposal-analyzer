@@ -9,6 +9,10 @@ class SourceImportRequest(BaseModel):
     url: HttpUrl
 
 
+class FolderBrowseRequest(BaseModel):
+    url: HttpUrl | None = None
+
+
 class ProposalSelection(BaseModel):
     meeting_id: str
     proposal_ids: list[str] = Field(min_length=1, max_length=2500)

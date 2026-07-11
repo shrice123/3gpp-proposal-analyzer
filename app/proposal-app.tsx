@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { FilterableMultiSelect } from "@carbon/react";
-import { Add, ArrowDown, ArrowUp, Close, Document, Download, Send, TrashCan, Upload, View } from "@carbon/icons-react";
+import { Add, ArrowDown, ArrowUp, Close, Document, Download, Folder, Send, TrashCan, Upload, View } from "@carbon/icons-react";
 import "@carbon/styles/css/styles.css";
 
 type Proposal = {
@@ -19,6 +19,13 @@ type Proposal = {
   analysis_state: string;
   preparation_state: string;
   preparation_error?: string;
+  file_url?: string;
+  file_name?: string;
+  file_kind?: string;
+  file_size?: number;
+  file_modified?: string;
+  metadata_source?: "index" | "directory";
+  analyzable?: number;
 };
 
 type Meeting = { id: string; name: string; proposal_count: number; source_url: string };
@@ -56,6 +63,10 @@ type Message = { id?: string; role: "user" | "assistant"; content: string; citat
 type TemplateInfo = { id: string; name: string; kind: "docx" | "pptx"; file_name?: string; warnings?: string[]; strict_compatible?: boolean };
 type SourceAlias = { id: string; alias: string; canonical_name: string; built_in: boolean };
 type FilterOption = { id: string; label: string; isSelectAll?: boolean };
+type FtpFolder = { kind: "folder"; name: string; url: string; modified?: string };
+type FtpFile = { kind: "file"; name: string; url: string; modified?: string; size?: number; extension?: string; analyzable: boolean; proposal?: Proposal | null };
+type Breadcrumb = { label: string; url: string };
+type BrowseResult = { workspace: Meeting; breadcrumbs: Breadcrumb[]; folders: FtpFolder[]; files: FtpFile[]; proposals: Proposal[]; index_status: "ready" | "failed" | "absent"; index_error?: string; facets: { agendas: string[]; sources: string[] } };
 type ChatThread = { id: string; meeting_id: string; meeting_name?: string; title: string; default_model_option_id?: string; archived: number; active_job_id?: string; message_count?: number; report_count?: number; updated_at: string };
 type ModelOption = { id: string; profile_id: string; model: string; label: string; provider: string; deployment: "external" | "local"; is_default: boolean };
 type Section = "workspace" | "settings";
@@ -66,8 +77,7 @@ const API =
   (typeof window !== "undefined" && window.proposalDesktop?.apiBase) ||
   process.env.NEXT_PUBLIC_API_BASE ||
   "http://127.0.0.1:8765";
-const SAMPLE_URL =
-  "https://www.3gpp.org/ftp/tsg_sa/WG2_Arch/TSGS2_175-AH-e_Electronic_2026-06/Docs";
+const DEFAULT_FTP_URL = "https://www.3gpp.org/ftp/tsg_sa/wg2_arch/";
 
 class ApiRequestError extends Error {
   constructor(message: string, public status: number, public detail: unknown) { super(message); }
@@ -224,10 +234,15 @@ export function ProposalApp() {
   const [connected, setConnected] = useState(false);
   const [, setMeetings] = useState<Meeting[]>([]);
   const [meeting, setMeeting] = useState<Meeting | null>(null);
-  const [sourceUrl, setSourceUrl] = useState(SAMPLE_URL);
+  const [sourceUrl, setSourceUrl] = useState("");
   const [proposals, setProposals] = useState<Proposal[]>(DEMO_PROPOSALS);
   const [agendas, setAgendas] = useState(["all", "20.3.1", "20.6.0", "19.4.2"]);
   const [sources, setSources] = useState(["all", "Ericsson", "Huawei", "Nokia"]);
+  const [folders, setFolders] = useState<FtpFolder[]>([]);
+  const [directoryFiles, setDirectoryFiles] = useState<FtpFile[]>([]);
+  const [breadcrumbs, setBreadcrumbs] = useState<Breadcrumb[]>([]);
+  const [indexStatus, setIndexStatus] = useState<"ready" | "failed" | "absent">("absent");
+  const [fileType, setFileType] = useState("all");
   const [selectedAgendas, setSelectedAgendas] = useState<string[]>([]);
   const [selectedSources, setSelectedSources] = useState<string[]>([]);
   const [search, setSearch] = useState("");
@@ -353,24 +368,13 @@ export function ProposalApp() {
     const availableModels = modelsResult.status === "fulfilled" ? modelsResult.value : [];
     setModelOptions(availableModels);
     setModelOptionId(availableModels.find((item) => item.is_default)?.id || availableModels[0]?.id || "");
-    if (meetingsResult.status === "fulfilled") {
-      const meetingRows = meetingsResult.value;
-      setMeetings(meetingRows);
-      setNotice(meetingRows.length ? "本地服务已连接，可继续上次工作" : "本地服务已就绪，请导入一个 3GPP 会议目录");
-      if (meetingRows[0]) {
-        setMeeting(meetingRows[0]);
-        setSourceUrl(meetingRows[0].source_url);
-        await loadProposals(meetingRows[0].id).catch((error) => setNotice(error instanceof Error ? error.message : "提案加载失败"));
-        const rows = await loadThreads(meetingRows[0].id).catch(() => [] as ChatThread[]);
-        const saved = localStorage.getItem(`proposal-thread-${meetingRows[0].id}`);
-        const initial = rows.find((item) => item.id === saved) || rows[0];
-        if (initial) await openThread(initial, availableModels);
-      } else {
+    if (meetingsResult.status === "fulfilled") setMeetings(meetingsResult.value);
+    if (healthResult.status === "fulfilled" && healthResult.value.ok) {
+      await browseDirectory(DEFAULT_FTP_URL, availableModels).catch((error) => {
         setProposals([]);
-      }
-    } else {
-      setNotice("会议列表暂时无法加载，其他功能仍可使用");
-    }
+        setNotice(error instanceof Error ? error.message : "默认目录加载失败");
+      });
+    } else setNotice("本地服务暂时无法连接");
   }
 
   async function loadThreads(meetingId: string) {
@@ -517,29 +521,57 @@ export function ProposalApp() {
     }
   }
 
+  async function browseDirectory(url: string, availableModels = modelOptions) {
+    const target = url.trim() || DEFAULT_FTP_URL;
+    const result = await api<BrowseResult>("/api/ftp/browse", {
+      method: "POST", body: JSON.stringify({ url: target }),
+    });
+    setMeeting(result.workspace);
+    setMeetings((current) => [result.workspace, ...current.filter((item) => item.id !== result.workspace.id)]);
+    setBreadcrumbs(result.breadcrumbs);
+    setFolders(result.folders);
+    setDirectoryFiles(result.files);
+    setIndexStatus(result.index_status);
+    setProposals(result.proposals);
+    setAgendas(result.facets.agendas);
+    setSources(result.facets.sources);
+    setSelected(new Set());
+    setSelectedAgendas([]);
+    setSelectedSources([]);
+    setSearch("");
+    setFileType("all");
+    requestedPreparation.current.clear();
+    filterStateRef.current = { meetingId: result.workspace.id, agendas: [], sources: [], search: "" };
+    setThreadId(null);
+    setThreads([]);
+    const rows = await loadThreads(result.workspace.id).catch(() => [] as ChatThread[]);
+    const saved = localStorage.getItem(`proposal-thread-${result.workspace.id}`);
+    const initial = rows.find((item) => item.id === saved) || rows[0];
+    if (initial) await openThread(initial, availableModels);
+    setConnected(true);
+    const suffix = result.index_status === "ready" ? "，已读取会议索引" : result.index_status === "failed" ? "，索引解析失败，已使用基础文件信息" : "";
+    setNotice(`已打开目录：${result.workspace.name}${suffix}`);
+  }
+
   async function importSource(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
-    setNotice("正在读取会议目录和 Excel 索引…");
+    setNotice("正在读取 3GPP FTP 目录…");
     try {
-      const imported = await api<Meeting>("/api/sources/import", {
-        method: "POST",
-        body: JSON.stringify({ url: sourceUrl }),
-      });
-      setMeeting(imported);
-      requestedPreparation.current.clear();
-      setMeetings((current) => [imported, ...current.filter((item) => item.id !== imported.id)]);
-      setSelectedAgendas([]);
-      setSelectedSources([]);
-      setSearch("");
-      await loadProposals(imported.id, [], [], "");
-      setConnected(true);
-      setNotice(`已导入 ${imported.proposal_count.toLocaleString()} 份提案`);
+      await browseDirectory(sourceUrl);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "导入失败");
+      setNotice(error instanceof Error ? error.message : "目录读取失败");
     } finally {
       setBusy(false);
     }
+  }
+
+  async function navigateDirectory(url: string) {
+    setBusy(true);
+    setNotice("正在读取目录…");
+    try { await browseDirectory(url); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "目录读取失败"); }
+    finally { setBusy(false); }
   }
 
   async function changeFilter(nextAgendas: string[], nextSources: string[], nextSearch = search) {
@@ -555,6 +587,7 @@ export function ProposalApp() {
   }
 
   function toggleProposal(id: string) {
+    if (proposals.find((item) => item.id === id)?.analyzable === 0) return;
     setSelected((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
@@ -564,7 +597,7 @@ export function ProposalApp() {
   }
 
   function toggleAll() {
-    setSelected(selected.size === proposals.length ? new Set() : new Set(proposals.map((item) => item.id)));
+    setSelected(selected.size === selectableProposals.length ? new Set() : new Set(selectableProposals.map((item) => item.id)));
   }
 
   async function runDownloadJob() {
@@ -781,6 +814,14 @@ export function ProposalApp() {
     }
   }
 
+  const visibleProposals = useMemo(() => proposals.filter((proposal) =>
+    (fileType === "all" || (proposal.file_kind || "zip") === fileType) &&
+    (indexStatus === "ready" || !search || `${proposal.tdoc} ${proposal.title}`.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
+  ), [proposals, fileType, indexStatus, search]);
+  const selectableProposals = useMemo(() => visibleProposals.filter((item) => item.analyzable !== 0), [visibleProposals]);
+  const visibleFolders = useMemo(() => folders.filter((item) => !search || item.name.toLocaleLowerCase().includes(search.toLocaleLowerCase())), [folders, search]);
+  const visibleFiles = useMemo(() => directoryFiles.filter((item) => !item.proposal && (!search || item.name.toLocaleLowerCase().includes(search.toLocaleLowerCase()))), [directoryFiles, search]);
+  const fileTypes = useMemo(() => Array.from(new Set(proposals.map((item) => item.file_kind || "zip"))).sort(), [proposals]);
   const selectedRows = useMemo(() => proposals.filter((proposal) => selected.has(proposal.id)), [proposals, selected]);
   const selectedAnalyzed = selectedRows.filter((item) => item.analysis_state === "analyzed").length;
   const agendaOptions = useMemo<FilterOption[]>(() => [
@@ -823,11 +864,11 @@ export function ProposalApp() {
       {section === "workspace" && (
         <main className="workspace-page">
           <section className="source-panel">
-            <div className="meeting-title"><strong>{meeting?.name || "会议提案"}</strong><span>{meeting ? `${meeting.proposal_count.toLocaleString()} 份文稿` : "输入 3GPP Docs 目录"}</span></div>
+            <div className="meeting-title"><strong>{meeting?.name || "FTP 文稿"}</strong><span>{meeting ? `${meeting.proposal_count.toLocaleString()} 份可分析文稿` : "默认打开 WG2 Arch"}</span></div>
             <form onSubmit={importSource} className="source-form">
-              <label htmlFor="source-url">3GPP Docs 目录链接</label>
+              <label htmlFor="source-url">3GPP 目录链接（选填）</label>
               <div className="source-input-row">
-                <input id="source-url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} />
+                <input id="source-url" value={sourceUrl} placeholder={DEFAULT_FTP_URL} onChange={(event) => setSourceUrl(event.target.value)} />
                 <button className="primary" type="submit" disabled={busy}>读取会议</button>
               </div>
             </form>
@@ -858,26 +899,30 @@ export function ProposalApp() {
           <section className="workbench">
             <div className={`proposal-pane ${mobileScopeOpen ? "mobile-open" : ""}`}>
               <div className="mobile-scope-header"><strong>提案范围</strong><button onClick={() => setMobileScopeOpen(false)} aria-label="关闭提案范围"><Close size={18} /></button></div>
+              <nav className="ftp-breadcrumbs" aria-label="3GPP FTP 目录">
+                {breadcrumbs.map((crumb, index) => <span key={crumb.url}>{index > 0 && <i>/</i>}{index === breadcrumbs.length - 1 ? <b>{crumb.label}</b> : <button disabled={busy} onClick={() => void navigateDirectory(crumb.url)}>{crumb.label}</button>}</span>)}
+              </nav>
               <div className="filter-bar">
-                <div><FilterableMultiSelect id="agenda-filter" titleText="Agenda item" placeholder="All agenda items" items={agendaOptions} selectedItems={agendaOptions.filter((item) => selectedAgendas.includes(item.id))} itemToString={(item) => item?.label || ""} onChange={({ selectedItems }) => { void changeFilter((selectedItems || []).filter((item) => !item.isSelectAll).map((item) => item.id), selectedSources); }} selectionFeedback="top-after-reopen" clearSelectionText="清空 Agenda 选择" /></div>
-                <div><FilterableMultiSelect id="source-filter" titleText="提案来源" placeholder="All sources" items={sourceOptions} selectedItems={sourceOptions.filter((item) => selectedSources.includes(item.id))} itemToString={(item) => item?.label || ""} onChange={({ selectedItems }) => { void changeFilter(selectedAgendas, (selectedItems || []).filter((item) => !item.isSelectAll).map((item) => item.id)); }} selectionFeedback="top-after-reopen" clearSelectionText="清空来源选择" /></div>
+                {indexStatus === "ready" ? <>
+                  <div><FilterableMultiSelect id="agenda-filter" titleText="Agenda item" placeholder="All agenda items" items={agendaOptions} selectedItems={agendaOptions.filter((item) => selectedAgendas.includes(item.id))} itemToString={(item) => item?.label || ""} onChange={({ selectedItems }) => { void changeFilter((selectedItems || []).filter((item) => !item.isSelectAll).map((item) => item.id), selectedSources); }} selectionFeedback="top-after-reopen" clearSelectionText="清空 Agenda 选择" /></div>
+                  <div><FilterableMultiSelect id="source-filter" titleText="提案来源" placeholder="All sources" items={sourceOptions} selectedItems={sourceOptions.filter((item) => selectedSources.includes(item.id))} itemToString={(item) => item?.label || ""} onChange={({ selectedItems }) => { void changeFilter(selectedAgendas, (selectedItems || []).filter((item) => !item.isSelectAll).map((item) => item.id)); }} selectionFeedback="top-after-reopen" clearSelectionText="清空来源选择" /></div>
+                </> : <div className="file-type-filter"><label>文件类型</label><select value={fileType} onChange={(event) => setFileType(event.target.value)}><option value="all">全部支持格式</option>{fileTypes.map((type) => <option key={type} value={type}>{type.toUpperCase()}</option>)}</select></div>}
                 <div className="search-box"><label>搜索</label><input value={search} placeholder="TDoc 或标题" onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void changeFilter(selectedAgendas, selectedSources, search); }} /></div>
               </div>
               <div className="proposal-list-header">
-                <button className="checkbox" aria-label="全选当前结果" onClick={toggleAll}>{selected.size === proposals.length && proposals.length ? "✓" : ""}</button>
-                <span>提案信息</span><span>状态</span>
+                <button className="checkbox" aria-label="全选当前结果" onClick={toggleAll}>{selected.size === selectableProposals.length && selectableProposals.length ? "✓" : ""}</button>
+                <span>目录内容</span><span>状态</span>
               </div>
               <div className="proposal-list">
-                {proposals.length === 0 ? (
-                  <div className="empty-state"><strong>还没有提案</strong><span>输入会议 Docs 目录链接后，agenda 和 source 会自动出现。</span></div>
-                ) : proposals.map((proposal) => (
+                {visibleFolders.map((folder) => <article key={folder.url} className="folder-row"><Folder size={20}/><button disabled={busy} onClick={() => void navigateDirectory(folder.url)}><strong>{folder.name}</strong><small>{folder.modified || "修改时间未知"}</small></button><span>文件夹</span></article>)}
+                {visibleProposals.map((proposal) => (
                   <article key={proposal.id} className={`proposal-row ${selected.has(proposal.id) ? "selected" : ""}`}>
-                    <button className="checkbox" aria-label={`选择 ${proposal.tdoc}`} onClick={() => toggleProposal(proposal.id)}>{selected.has(proposal.id) ? "✓" : ""}</button>
-                    <button className="proposal-main" onClick={() => toggleProposal(proposal.id)}>
-                      <div className="proposal-meta"><b>{proposal.tdoc}</b><span>{proposal.agenda_item}</span><span title={proposal.source}>{proposal.canonical_source || proposal.primary_source}</span></div>
+                    <button className="checkbox" disabled={proposal.analyzable === 0} aria-label={`选择 ${proposal.tdoc}`} onClick={() => toggleProposal(proposal.id)}>{selected.has(proposal.id) ? "✓" : ""}</button>
+                    <button className="proposal-main" disabled={proposal.analyzable === 0} onClick={() => toggleProposal(proposal.id)}>
+                      <div className="proposal-meta"><b>{proposal.tdoc}</b><span>{proposal.metadata_source === "index" ? proposal.agenda_item : (proposal.file_kind || "file").toUpperCase()}</span><span title={proposal.source}>{proposal.metadata_source === "index" ? (proposal.canonical_source || proposal.primary_source) : formatBytes(proposal.file_size)}</span></div>
                       <h3>{proposal.title}</h3>
-                      <p>{proposal.agenda_description || "暂无 agenda 描述"}</p>
-                      <p className="proposal-source" title={proposal.source}>完整来源：{proposal.source}</p>
+                      <p>{proposal.metadata_source === "index" ? (proposal.agenda_description || "暂无 agenda 描述") : (proposal.file_modified || "修改时间未知")}</p>
+                      {proposal.metadata_source === "index" && <p className="proposal-source" title={proposal.source}>完整来源：{proposal.source}</p>}
                     </button>
                     <div className="status-cell">
                       <span className={`status ${["analyzed", "ready"].includes(proposal.analysis_state === "analyzed" ? "analyzed" : proposal.preparation_state) ? "done" : proposal.preparation_state === "failed" || proposal.analysis_state === "failed" ? "failed" : "waiting"}`}>
@@ -889,6 +934,8 @@ export function ProposalApp() {
                     </div>
                   </article>
                 ))}
+                {visibleFiles.map((file) => <article key={file.url} className="plain-file-row"><Document size={18}/><div><strong>{file.name}</strong><small>{[file.extension?.toUpperCase(), formatBytes(file.size), file.modified].filter(Boolean).join(" · ")}</small></div><a href={file.url} target="_blank" rel="noreferrer">下载</a></article>)}
+                {!visibleFolders.length && !visibleProposals.length && !visibleFiles.length && <div className="empty-state"><strong>当前目录为空或没有匹配项</strong><span>可通过上方面包屑返回上级目录。</span></div>}
               </div>
             </div>
             {mobileScopeOpen && <button className="scope-backdrop" aria-label="关闭提案范围" onClick={() => setMobileScopeOpen(false)} />}

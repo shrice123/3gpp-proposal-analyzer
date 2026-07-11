@@ -23,6 +23,8 @@ USER_AGENT = (
 )
 INDEX_PATTERN = re.compile(r"TDoc_List_Meeting_.*\.xlsx$", re.IGNORECASE)
 TDOC_PATTERN = re.compile(r"^[A-Za-z0-9]+-[A-Za-z0-9-]+$")
+SUPPORTED_DOCUMENT_SUFFIXES = {".zip", ".docx", ".pptx", ".pdf", ".xlsx"}
+DEFAULT_FTP_URL = "https://www.3gpp.org/ftp/tsg_sa/wg2_arch/"
 
 
 def primary_source(source: str) -> str:
@@ -43,6 +45,72 @@ class LinkParser(HTMLParser):
                 # decoding it before urljoin would incorrectly turn the suffix
                 # into a URL fragment and make the XLSX undiscoverable.
                 self.links.append(value)
+
+
+class DirectoryTableParser(HTMLParser):
+    """Read the public 3GPP directory table without depending on its styling."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: list[dict[str, Any]] = []
+        self._row: dict[str, Any] | None = None
+        self._cell: list[str] | None = None
+        self._cells: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attrs_dict = dict(attrs)
+        if tag.lower() == "tr":
+            self._row, self._cells = {"href": "", "name": ""}, []
+        elif tag.lower() == "td" and self._row is not None:
+            self._cell = []
+        elif tag.lower() == "a" and self._row is not None:
+            href = attrs_dict.get("href")
+            if href and not href.startswith("?") and not href.startswith("#"):
+                self._row["href"] = href
+
+    def handle_data(self, data: str) -> None:
+        if self._cell is not None:
+            self._cell.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "td" and self._cell is not None:
+            self._cells.append(" ".join("".join(self._cell).split()))
+            self._cell = None
+        elif tag.lower() == "tr" and self._row is not None:
+            if self._row.get("href"):
+                values = [value for value in self._cells if value and value.casefold() != "icon"]
+                name = unquote(urlparse(self._row["href"]).path.rstrip("/").split("/")[-1])
+                self._row.update({
+                    "name": name,
+                    "modified": next((v for v in values if re.match(r"^\d{4}/\d{2}/\d{2}", v)), ""),
+                    "size_text": next((v for v in values if re.search(r"\b(?:bytes?|kb|mb|gb)\b", v, re.I)), ""),
+                })
+                self.rows.append(self._row)
+            self._row, self._cell, self._cells = None, None, []
+
+
+def _parse_size(value: str) -> int | None:
+    match = re.search(r"([\d.,]+)\s*(bytes?|kb|mb|gb)", value or "", re.I)
+    if not match:
+        return None
+    number = match.group(1).replace(".", "").replace(",", ".")
+    try:
+        amount = float(number)
+    except ValueError:
+        return None
+    multiplier = {"byte": 1, "bytes": 1, "kb": 1024, "mb": 1024 ** 2, "gb": 1024 ** 3}[match.group(2).casefold()]
+    return int(amount * multiplier)
+
+
+def _breadcrumbs(url: str) -> list[dict[str, str]]:
+    parsed = urlparse(url)
+    parts = [unquote(part) for part in parsed.path.split("/") if part]
+    crumbs = [{"label": "www.3gpp.org", "url": "https://www.3gpp.org/"}]
+    path = ""
+    for part in parts:
+        path += "/" + quote(part, safe="")
+        crumbs.append({"label": part, "url": f"https://www.3gpp.org{path}/"})
+    return crumbs
 
 
 def validate_3gpp_url(url: str) -> str:
@@ -77,9 +145,46 @@ def list_directory(url: str) -> list[str]:
     with http_client(validated) as client:
         response = client.get(validated)
         response.raise_for_status()
+    content_type = str(getattr(response, "headers", {}).get("content-type", ""))
+    if content_type and "html" not in content_type.casefold():
+        raise ValueError("链接必须指向 3GPP FTP 文件夹，不能直接指向文件")
     parser = LinkParser()
     parser.feed(response.text)
     return [urljoin(validated, link) for link in parser.links]
+
+
+def list_directory_entries(url: str) -> list[dict[str, Any]]:
+    validated = validate_3gpp_url(url)
+    with http_client(validated) as client:
+        response = client.get(validated)
+        response.raise_for_status()
+    content_type = str(getattr(response, "headers", {}).get("content-type", ""))
+    if content_type and "html" not in content_type.casefold():
+        raise ValueError("链接必须指向 3GPP FTP 文件夹，不能直接指向文件")
+    parser = DirectoryTableParser()
+    parser.feed(response.text)
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in parser.rows:
+        absolute = urljoin(validated, row["href"])
+        parsed = urlparse(absolute)
+        if parsed.hostname not in {"www.3gpp.org", "3gpp.org"} or not parsed.path.lower().startswith("/ftp/"):
+            continue
+        clean_url = absolute.split("?", 1)[0].split("#", 1)[0]
+        if clean_url in seen or clean_url.rstrip("/") == validated.rstrip("/"):
+            continue
+        seen.add(clean_url)
+        suffix = Path(row["name"]).suffix.casefold()
+        is_folder = not row.get("size_text")
+        if is_folder:
+            clean_url = clean_url.rstrip("/") + "/"
+        entries.append({
+            "kind": "folder" if is_folder else "file",
+            "name": row["name"], "url": clean_url,
+            "modified": row.get("modified") or "", "size": _parse_size(row.get("size_text") or ""),
+            "extension": suffix.lstrip("."), "analyzable": suffix in SUPPORTED_DOCUMENT_SUFFIXES,
+        })
+    return entries
 
 
 def find_index_url(links: list[str]) -> str:
@@ -186,6 +291,109 @@ def parse_index(path: Path, listing_links: list[str], source_url: str) -> list[d
         )
     workbook.close()
     return proposals
+
+
+def browse_folder(source_url: str, database: Database = db) -> dict[str, Any]:
+    """Browse one FTP level and materialize analyzable files as proposal records."""
+    source_url = validate_3gpp_url(source_url or DEFAULT_FTP_URL)
+    entries = list_directory_entries(source_url)
+    files = [item for item in entries if item["kind"] == "file"]
+    folders = [item for item in entries if item["kind"] == "folder"]
+    index_entry = next((item for item in files if INDEX_PATTERN.search(item["name"])), None)
+    index_status = "absent"
+    index_error = ""
+    indexed: list[dict[str, Any]] = []
+    if index_entry:
+        index_status = "ready"
+        seed = hashlib.sha256(index_entry["url"].encode("utf-8")).hexdigest()[:20]
+        index_path = settings.cache_dir / "meetings" / seed / "index.xlsx"
+        try:
+            download_file(index_entry["url"], index_path, source_url)
+            indexed = parse_index(index_path, [item["url"] for item in files], source_url)
+        except Exception as exc:
+            index_status, index_error, indexed = "failed", str(exc), []
+
+    meeting_id = hashlib.sha256(source_url.encode("utf-8")).hexdigest()[:24]
+    now = utc_now()
+    by_name = {item["name"].casefold(): item for item in files}
+    records: list[dict[str, Any]] = []
+    consumed: set[str] = set()
+    for item in indexed:
+        remote = by_name.get(f"{item['tdoc']}.zip".casefold())
+        if remote:
+            consumed.add(remote["url"])
+        file_url = remote["url"] if remote else item["zip_url"]
+        records.append({
+            **item, "file_url": file_url, "file_name": remote["name"] if remote else f"{item['tdoc']}.zip",
+            "file_kind": "zip", "file_size": remote.get("size") if remote else None,
+            "file_modified": remote.get("modified") if remote else None, "metadata_source": "index",
+            "analyzable": bool(remote),
+        })
+    for remote in files:
+        if remote["url"] in consumed or not remote["analyzable"]:
+            continue
+        suffix = Path(remote["name"]).suffix.casefold()
+        stem = Path(remote["name"]).stem
+        records.append({
+            "tdoc": stem, "title": remote["name"], "source": "Unknown", "primary_source": "Unknown",
+            "canonical_source": "Unknown", "agenda_item": "Unassigned", "agenda_description": "",
+            "agenda_sort": 999999, "status": "available", "abstract": "", "zip_url": remote["url"],
+            "file_url": remote["url"], "file_name": remote["name"], "file_kind": suffix.lstrip("."),
+            "file_size": remote["size"], "file_modified": remote["modified"], "metadata_source": "directory",
+            "analyzable": True,
+        })
+    with database.transaction() as connection:
+        connection.execute(
+            """INSERT INTO meetings(id,name,source_url,index_file,proposal_count,created_at,updated_at)
+               VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,index_file=excluded.index_file,
+               proposal_count=excluded.proposal_count,updated_at=excluded.updated_at""",
+            (meeting_id, meeting_name_from_url(source_url), source_url,
+             str(index_path) if index_entry and index_status == "ready" else None, len(records), now, now),
+        )
+        current_ids: set[str] = set()
+        for item in records:
+            proposal_id = uuid.uuid5(uuid.NAMESPACE_URL, f"3gpp-file:{item['file_url']}").hex
+            connection.execute(
+                """INSERT INTO proposals(id,meeting_id,tdoc,title,source,primary_source,canonical_source,
+                   agenda_item,agenda_description,agenda_sort,status,abstract,zip_url,file_url,file_name,file_kind,
+                   file_size,file_modified,metadata_source,analyzable)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(meeting_id,tdoc) DO UPDATE SET title=excluded.title,source=excluded.source,
+                   primary_source=excluded.primary_source,canonical_source=excluded.canonical_source,
+                   agenda_item=excluded.agenda_item,agenda_description=excluded.agenda_description,
+                   agenda_sort=excluded.agenda_sort,status=excluded.status,abstract=excluded.abstract,
+                   zip_url=excluded.zip_url,file_url=excluded.file_url,file_name=excluded.file_name,
+                   file_kind=excluded.file_kind,file_size=excluded.file_size,file_modified=excluded.file_modified,
+                   metadata_source=excluded.metadata_source,analyzable=excluded.analyzable""",
+                (proposal_id, meeting_id, item["tdoc"], item["title"], item["source"], item["primary_source"],
+                 item["canonical_source"], item["agenda_item"], item["agenda_description"], item["agenda_sort"],
+                 item["status"], item["abstract"], item["zip_url"], item["file_url"], item["file_name"],
+                 item["file_kind"], item["file_size"], item["file_modified"], item["metadata_source"],
+                 int(item["analyzable"])),
+            )
+            stored = connection.execute(
+                "SELECT id FROM proposals WHERE meeting_id=? AND tdoc=?", (meeting_id, item["tdoc"])
+            ).fetchone()
+            current_ids.add(stored["id"] if stored else proposal_id)
+        old_rows = connection.execute("SELECT id FROM proposals WHERE meeting_id=?", (meeting_id,)).fetchall()
+        for row in old_rows:
+            if row["id"] not in current_ids:
+                connection.execute("DELETE FROM proposals WHERE id=?", (row["id"],))
+    proposal_rows = database.query("SELECT * FROM proposals WHERE meeting_id=? ORDER BY agenda_sort,tdoc", (meeting_id,))
+    raw_files = []
+    proposal_by_url = {row["file_url"]: row for row in proposal_rows}
+    for item in files:
+        raw_files.append({**item, "proposal": proposal_by_url.get(item["url"])})
+    return {
+        "workspace": {"id": meeting_id, "name": meeting_name_from_url(source_url), "source_url": source_url,
+                      "proposal_count": len(proposal_rows)},
+        "breadcrumbs": _breadcrumbs(source_url), "folders": folders, "files": raw_files,
+        "proposals": proposal_rows, "index_status": index_status, "index_error": index_error,
+        "facets": {
+            "agendas": ["all", *sorted({row["agenda_item"] for row in proposal_rows if row["agenda_item"] != "Unassigned"})],
+            "sources": ["all", *sorted({row["canonical_source"] for row in proposal_rows if row["canonical_source"] != "Unknown"})],
+        },
+    }
 
 
 def import_meeting(source_url: str, database: Database = db, index_path: Path | None = None) -> dict[str, Any]:

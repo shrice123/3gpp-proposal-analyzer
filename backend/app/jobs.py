@@ -266,7 +266,7 @@ class JobRunner:
             return self._proposal_locks.setdefault(proposal_id, threading.Lock())
 
     def _ensure_zip(self, proposal: dict[str, Any], cancelled: Callable[[], bool] | None = None) -> tuple[Path, dict[str, Any]]:
-        cache_path = settings.cache_dir / "zips" / f"{proposal['tdoc']}.zip"
+        cache_path = settings.cache_dir / "sources" / proposal["id"] / (proposal.get("file_name") or f"{proposal['tdoc']}.zip")
         if cache_path.exists() and cache_path.stat().st_size > 0 and zipfile.is_zipfile(cache_path):
             self.database.execute("UPDATE proposals SET download_state='downloaded' WHERE id=?", (proposal["id"],))
             return cache_path, {"bytes": cache_path.stat().st_size, "cached": True}
@@ -276,10 +276,38 @@ class JobRunner:
             (proposal["id"],),
         )
         meeting = self.database.one("SELECT source_url FROM meetings WHERE id=?", (proposal["meeting_id"],))
-        metadata = download_file(proposal["zip_url"], cache_path, meeting["source_url"] if meeting else None, cancelled)
+        metadata = download_file(proposal.get("file_url") or proposal["zip_url"], cache_path, meeting["source_url"] if meeting else None, cancelled)
         if not zipfile.is_zipfile(cache_path):
             cache_path.unlink(missing_ok=True)
             raise ValueError("下载文件不是有效 ZIP")
+        self.database.execute("UPDATE proposals SET download_state='downloaded' WHERE id=?", (proposal["id"],))
+        return cache_path, metadata
+
+    def _ensure_source(self, proposal: dict[str, Any], cancelled: Callable[[], bool] | None = None) -> tuple[Path, dict[str, Any]]:
+        kind = (proposal.get("file_kind") or "zip").casefold()
+        if not proposal.get("analyzable", 1):
+            raise ValueError("该文件格式不支持分析")
+        if kind == "zip":
+            try:
+                return self._ensure_zip(proposal, cancelled)
+            except TypeError:
+                return self._ensure_zip(proposal)
+        if kind not in {"docx", "pptx", "pdf", "xlsx"}:
+            raise ValueError(f"暂不支持分析 {kind or '未知'} 格式")
+        name = proposal.get("file_name") or f"{proposal['tdoc']}.{kind}"
+        cache_path = settings.cache_dir / "sources" / proposal["id"] / name
+        if cache_path.exists() and cache_path.stat().st_size > 0:
+            self.database.execute("UPDATE proposals SET download_state='downloaded' WHERE id=?", (proposal["id"],))
+            return cache_path, {"bytes": cache_path.stat().st_size, "cached": True}
+        meeting = self.database.one("SELECT source_url FROM meetings WHERE id=?", (proposal["meeting_id"],))
+        self.database.execute(
+            "UPDATE proposals SET download_state='downloading',preparation_state='downloading',preparation_error=NULL WHERE id=?",
+            (proposal["id"],),
+        )
+        metadata = download_file(
+            proposal.get("file_url") or proposal["zip_url"], cache_path,
+            meeting["source_url"] if meeting else None, cancelled,
+        )
         self.database.execute("UPDATE proposals SET download_state='downloaded' WHERE id=?", (proposal["id"],))
         return cache_path, metadata
 
@@ -302,10 +330,10 @@ class JobRunner:
                 if status:
                     status(f"正在检查或下载 {proposal['tdoc']}")
                 try:
-                    archive, metadata = self._ensure_zip(proposal, (lambda: self._is_cancelling(job_id)) if job_id else None)
+                    archive, metadata = self._ensure_source(proposal, (lambda: self._is_cancelling(job_id)) if job_id else None)
                 except TypeError:
                     # Preserve compatibility with injected/legacy single-argument download adapters.
-                    archive, metadata = self._ensure_zip(proposal)
+                    archive, metadata = self._ensure_source(proposal)
                 source_sha256 = self._sha256(archive)
                 cached = self.database.one("SELECT * FROM preparations WHERE proposal_id=?", (proposal["id"],))
                 if cached and cached["source_sha256"] == source_sha256:
@@ -324,11 +352,11 @@ class JobRunner:
                 if status:
                     status(f"正在提取正文、表格和图表素材 · {proposal['tdoc']}")
                 with self._parse_slots:
-                    extract_dir = settings.cache_dir / "extracted" / proposal["tdoc"]
-                    conversion_dir = settings.cache_dir / "converted" / proposal["tdoc"]
+                    extract_dir = settings.cache_dir / "extracted" / proposal["id"]
+                    conversion_dir = settings.cache_dir / "converted" / proposal["id"]
                     shutil.rmtree(extract_dir, ignore_errors=True)
                     shutil.rmtree(conversion_dir, ignore_errors=True)
-                    files = safe_extract(archive, extract_dir)
+                    files = safe_extract(archive, extract_dir) if (proposal.get("file_kind") or "zip") == "zip" else [archive]
                     documents = [
                         extract_document_isolated(path, conversion_dir, 300, (lambda: self._is_cancelling(job_id)) if job_id else None)
                         for path in files
@@ -1010,7 +1038,7 @@ class JobRunner:
                 message=f"正在下载 {proposal['tdoc']} ({index + 1}/{len(proposals)})",
             )
             try:
-                path, metadata = self._ensure_zip(proposal)
+                path, metadata = self._ensure_source(proposal)
                 successful.append({"proposal": proposal, "path": path, "sha256": self._sha256(path), **metadata})
             except Exception as exc:
                 failed.append({"tdoc": proposal["tdoc"], "title": proposal["title"], "error": str(exc)})
@@ -1021,13 +1049,18 @@ class JobRunner:
         self.database.update_job(job_id, progress=0.9, message="正在生成总压缩包")
         with zipfile.ZipFile(package_path, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as output:
             for item in successful:
-                output.write(item["path"], f"proposals/{item['proposal']['tdoc']}.zip")
+                proposal = item["proposal"]
+                if (proposal.get("file_kind") or "zip") == "zip":
+                    archive_name = f"proposals/{proposal.get('file_name') or proposal['tdoc'] + '.zip'}"
+                else:
+                    archive_name = f"documents/{proposal.get('file_name') or item['path'].name}"
+                output.write(item["path"], archive_name)
             rows = [["TDoc", "Title", "Source", "Agenda", "Original URL", "Bytes", "SHA-256", "Status"]]
             for item in successful:
                 proposal = item["proposal"]
                 rows.append([
                     proposal["tdoc"], proposal["title"], proposal["source"], proposal["agenda_item"],
-                    proposal["zip_url"], str(item.get("bytes", item["path"].stat().st_size)), item["sha256"], "downloaded",
+                    proposal.get("file_url") or proposal["zip_url"], str(item.get("bytes", item["path"].stat().st_size)), item["sha256"], "downloaded",
                 ])
             output.writestr("manifest.csv", _csv_bytes(rows))
             if failed:

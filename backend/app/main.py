@@ -28,6 +28,7 @@ from .schemas import (
     ChatJobRequest,
     ChatThreadCreate,
     ChatThreadUpdate,
+    FolderBrowseRequest,
     ModelProfileRequest,
     ProposalSelection,
     ReportOutlineRequest,
@@ -37,7 +38,7 @@ from .schemas import (
     SourceImportRequest,
 )
 from .source_normalization import BUILTIN_ALIASES, alias_key, rebuild_canonical_sources, save_source_alias
-from .threegpp import import_meeting, list_proposals
+from .threegpp import DEFAULT_FTP_URL, browse_folder, import_meeting, list_proposals
 
 
 @asynccontextmanager
@@ -115,6 +116,14 @@ def meetings() -> list[dict[str, Any]]:
 def import_source(payload: SourceImportRequest) -> dict[str, Any]:
     try:
         return import_meeting(str(payload.url))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/ftp/browse")
+def browse_ftp(payload: FolderBrowseRequest) -> dict[str, Any]:
+    try:
+        return browse_folder(str(payload.url) if payload.url else DEFAULT_FTP_URL)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

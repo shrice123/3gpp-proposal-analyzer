@@ -21,8 +21,9 @@ test("server-renders the 3GPP proposal workbench", async () => {
   assert.match(html, /<title>3GPP 提案洞察<\/title>/);
   assert.match(html, /class="brand-mark">3GPP</);
   assert.match(html, /提案工作区/);
-  assert.match(html, /All agenda items/);
-  assert.match(html, /All sources/);
+  assert.match(html, /3GPP 目录链接（选填）/);
+  assert.match(html, /https:\/\/www\.3gpp\.org\/ftp\/tsg_sa\/wg2_arch\//);
+  assert.match(html, /目录内容/);
   assert.match(html, /Enter 发送，Option\+Enter 换行/);
   assert.match(html, /报告设置/);
   assert.match(html, /配置新的大模型/);
@@ -57,6 +58,8 @@ test("keeps the enterprise visual and accessibility preflight rules", async () =
   assert.match(app, /toggleAllFilteredArchived/);
   assert.match(app, /session-backdrop/);
   assert.match(app, /Promise\.allSettled/);
+  assert.match(app, /ftp\/browse/);
+  assert.match(app, /ftp-breadcrumbs/);
   assert.match(app, /chat_mode: sendMode/);
   assert.match(app, /chat-progress-dock/);
   assert.match(app, /回到最新消息/);

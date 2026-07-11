@@ -20,7 +20,7 @@ from app.extractors import extract_office_visual_evidence, safe_extract
 from app.jobs import JobRunner
 from app.models import model_options, save_profile, stream_text_model
 from app.reports import create_outline, render_report
-from app.threegpp import list_proposals, parse_index, primary_source, validate_3gpp_url
+from app.threegpp import browse_folder, list_directory_entries, list_proposals, parse_index, primary_source, validate_3gpp_url
 from app.source_normalization import apply_meeting_parent_names, canonical_source_name, extract_primary_source, save_source_alias
 from app.main import app
 
@@ -35,6 +35,39 @@ class UrlValidationTests(unittest.TestCase):
     def test_rejects_non_3gpp_host(self):
         with self.assertRaises(ValueError):
             validate_3gpp_url("https://example.com/ftp/meeting/Docs")
+
+
+class FtpBrowsingTests(unittest.TestCase):
+    def test_parses_mixed_folder_listing(self):
+        html = """<table><tr><td></td><td>icon</td><td><a href='Child'>Child</a></td><td>2026/07/01 10:00</td><td></td></tr>
+        <tr><td></td><td>icon</td><td><a href='S2-1.zip'>S2-1.zip</a></td><td>2026/07/02 11:00</td><td>444,4 KB</td></tr></table>"""
+        class Response:
+            text = html
+            def raise_for_status(self): return None
+        class Client:
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def get(self, *_): return Response()
+        with patch("app.threegpp.http_client", return_value=Client()):
+            rows = list_directory_entries("https://www.3gpp.org/ftp/test/")
+        self.assertEqual([row["kind"] for row in rows], ["folder", "file"])
+        self.assertTrue(rows[1]["analyzable"])
+        self.assertGreater(rows[1]["size"], 400_000)
+
+    def test_browses_without_index_and_materializes_supported_files(self):
+        entries = [
+            {"kind": "folder", "name": "Child", "url": "https://www.3gpp.org/ftp/test/Child/", "modified": "now", "size": None, "extension": "", "analyzable": False},
+            {"kind": "file", "name": "notes.docx", "url": "https://www.3gpp.org/ftp/test/notes.docx", "modified": "now", "size": 12, "extension": "docx", "analyzable": True},
+            {"kind": "file", "name": "readme.txt", "url": "https://www.3gpp.org/ftp/test/readme.txt", "modified": "now", "size": 4, "extension": "txt", "analyzable": False},
+        ]
+        with tempfile.TemporaryDirectory() as temp:
+            database = Database(Path(temp) / "browse.sqlite3")
+            with patch("app.threegpp.list_directory_entries", return_value=entries):
+                result = browse_folder("https://www.3gpp.org/ftp/test/", database)
+        self.assertEqual(result["index_status"], "absent")
+        self.assertEqual(len(result["folders"]), 1)
+        self.assertEqual([item["file_name"] for item in result["proposals"]], ["notes.docx"])
+        self.assertIsNone(next(item for item in result["files"] if item["name"] == "readme.txt")["proposal"])
 
 
 class ApiSmokeTests(unittest.TestCase):
@@ -144,7 +177,7 @@ class DatabaseUpgradeTests(unittest.TestCase):
             database = Database(path)
             columns = {row["name"] for row in database.query("PRAGMA table_info(jobs)")}
             self.assertIn("thread_id", columns)
-            self.assertEqual(database.one("SELECT value FROM app_meta WHERE key='schema_version'")["value"], "7")
+            self.assertEqual(database.one("SELECT value FROM app_meta WHERE key='schema_version'")["value"], "8")
 
     def test_schema_seven_backfills_stable_message_sequence(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -403,6 +436,31 @@ class VisualEvidenceTests(unittest.TestCase):
 
 
 class PackageJobTests(unittest.TestCase):
+    def test_direct_document_uses_file_url_without_zip_validation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            database = Database(Path(temp) / "direct.sqlite3")
+            now = utc_now()
+            database.execute(
+                "INSERT INTO meetings(id,name,source_url,proposal_count,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+                ("direct", "Direct", "https://www.3gpp.org/ftp/test/", 1, now, now),
+            )
+            database.execute(
+                """INSERT INTO proposals(id,meeting_id,tdoc,title,source,agenda_item,agenda_description,zip_url,
+                   file_url,file_name,file_kind) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                ("doc", "direct", "notes", "notes.docx", "Unknown", "Unassigned", "",
+                 "https://www.3gpp.org/ftp/test/notes.docx", "https://www.3gpp.org/ftp/test/notes.docx", "notes.docx", "docx"),
+            )
+            runner = JobRunner(database)
+            proposal = database.one("SELECT * FROM proposals WHERE id='doc'")
+            def fake_download(url, destination, *_):
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(b"direct-document")
+                return {"bytes": destination.stat().st_size}
+            with patch("app.jobs.download_file", side_effect=fake_download):
+                path, metadata = runner._ensure_source(proposal)
+            self.assertEqual(path.name, "notes.docx")
+            self.assertEqual(metadata["bytes"], len(b"direct-document"))
+
     def test_download_package_keeps_original_zips(self):
         with tempfile.TemporaryDirectory() as temp:
             database = Database(Path(temp) / "test.sqlite3")

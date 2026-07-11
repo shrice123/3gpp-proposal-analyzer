@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 APP_VERSION = "0.2.2"
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def default_data_dir() -> Path:
