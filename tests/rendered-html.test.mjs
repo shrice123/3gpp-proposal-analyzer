@@ -63,6 +63,9 @@ test("keeps the enterprise visual and accessibility preflight rules", async () =
   assert.match(app, /chat_mode: sendMode/);
   assert.match(app, /chat-progress-dock/);
   assert.match(app, /回到最新消息/);
+  assert.match(app, /requestAnimationFrame\(\(\) => requestAnimationFrame\(\(\) => scrollToLatest\(true\)\)\)/);
+  assert.doesNotMatch(app, /className="citations"/);
+  assert.doesNotMatch(css, /\.citations\s*\{/);
   assert.match(app, /client_request_id/);
   assert.doesNotMatch(app, /processing-message/);
   assert.doesNotMatch(app, /显示已归档/);

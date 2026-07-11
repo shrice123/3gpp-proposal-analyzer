@@ -401,7 +401,7 @@ export function ProposalApp() {
       const history = await api<Message[]>(`/api/chats/${thread.id}/messages`, { signal: controller.signal }, 2);
       if (messageRequestRef.current.sequence !== sequence) return;
       updateSession(thread.id, (current) => ({ ...current, messages: history.length ? history : INITIAL_MESSAGES, error: undefined }));
-      requestAnimationFrame(() => requestAnimationFrame(() => { if (messageListRef.current) messageListRef.current.scrollTop = 0; followLatestRef.current = false; setShowLatestButton(false); }));
+      requestAnimationFrame(() => requestAnimationFrame(() => scrollToLatest(true)));
     } catch (error) {
       if (controller.signal.aborted) return;
       setThreadLoadError(error instanceof Error ? error.message : "会话加载暂时失败");
@@ -961,7 +961,6 @@ export function ProposalApp() {
                     <span className="message-role">{message.role === "assistant" ? "AI" : "我"}</span>
                     <div>
                       <p>{message.content}</p>
-                      {message.citations?.length ? <div className="citations">{message.citations.map((citation) => <button key={`${citation.tdoc}-${citation.artifact_name}`}>{citation.tdoc}<small>{citation.artifact_name || "分析摘要"}</small></button>)}</div> : null}
                       {message.artifacts?.map((artifact) => <ReportArtifactCard key={`${artifact.kind}-${artifact.report_id}`} artifact={artifact} onRender={renderReportArtifact} onPreview={(url) => setPreviewUrl(`${API}${url}`)} />)}
                     </div>
                   </div>
