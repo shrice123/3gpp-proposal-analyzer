@@ -208,7 +208,7 @@ jobs:
             collected/*.exe
             collected/*.dmg
             collected/*.blockmap
-            collected/*.yml
+            collected/latest*.yml
       - name: Publish portable asset
         if: ${{ github.event_name == 'push' || inputs.release_kind == 'portable' || inputs.release_kind == 'both' }}
         uses: softprops/action-gh-release@v2
