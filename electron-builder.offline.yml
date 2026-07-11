@@ -1,11 +1,8 @@
 extends: electron-builder.online.yml
 artifactName: 3GPP-Proposal-Analyzer-Offline-${version}-${os}-${arch}.${ext}
 extraResources:
-  - from: backend/dist
-    to: backend
-    filter:
-      - "proposal-backend*"
   - from: runtime-bundle
     to: runtime-bundle
     filter:
       - "**/*"
+      - "!manifest.json"
