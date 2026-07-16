@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.0"
 SCHEMA_VERSION = 8
 
 

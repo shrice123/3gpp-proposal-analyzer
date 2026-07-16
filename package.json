@@ -3,7 +3,7 @@
   "productName": "3GPP Proposal Analyzer",
   "description": "Local-first 3GPP proposal download, background preparation, analysis, chat and reporting desktop app.",
   "author": "Proposal Insight",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "main": "desktop/main.cjs",
   "engines": {
@@ -24,7 +24,7 @@
     "test:launcher": "bash scripts/test-launcher.sh",
     "test:full": "bash scripts/test-full.sh",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs",
+    "test": "npm run build && node --test tests/rendered-html.test.mjs tests/chat-history.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },

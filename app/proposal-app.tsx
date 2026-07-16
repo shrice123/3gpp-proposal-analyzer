@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { FilterableMultiSelect } from "@carbon/react";
 import { Add, ArrowDown, ArrowUp, Close, Document, Download, Folder, Send, TrashCan, Upload, View } from "@carbon/icons-react";
 import "@carbon/styles/css/styles.css";
+import { extractRequestHistory, navigateRequestHistory, shouldNavigateRequestHistory } from "./chat-history";
 
 type Proposal = {
   id: string;
@@ -71,7 +72,17 @@ type ChatThread = { id: string; meeting_id: string; meeting_name?: string; title
 type ModelOption = { id: string; profile_id: string; model: string; label: string; provider: string; deployment: "external" | "local"; is_default: boolean };
 type Section = "workspace" | "settings";
 type ChatMode = "auto" | "proposal" | "general";
-type SessionRuntime = { messages: Message[]; draft: string; job: Job | null; busy: boolean; error?: string; chatMode: ChatMode; nextMode?: ChatMode };
+type SessionRuntime = {
+  messages: Message[];
+  draft: string;
+  job: Job | null;
+  busy: boolean;
+  error?: string;
+  chatMode: ChatMode;
+  nextMode?: ChatMode;
+  historyIndex: number | null;
+  historyDraft: string;
+};
 
 const API =
   (typeof window !== "undefined" && window.proposalDesktop?.apiBase) ||
@@ -266,13 +277,14 @@ export function ProposalApp() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const requestedPreparation = useRef(new Set<string>());
   const [sessionStates, setSessionStates] = useState<Record<string, SessionRuntime>>({
-    __new__: { messages: INITIAL_MESSAGES, draft: "", job: null, busy: false, chatMode: "auto" },
+    __new__: { messages: INITIAL_MESSAGES, draft: "", job: null, busy: false, chatMode: "auto", historyIndex: null, historyDraft: "" },
   });
   const messageRequestRef = useRef<{ sequence: number; controller?: AbortController }>({ sequence: 0 });
   const activeThreadRef = useRef<string | null>(null);
   const filterRequestRef = useRef<{ sequence: number; controller?: AbortController }>({ sequence: 0 });
   const filterStateRef = useRef<{ meetingId?: string; agendas: string[]; sources: string[]; search: string }>({ agendas: [], sources: [], search: "" });
   const messageListRef = useRef<HTMLDivElement | null>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
   const followLatestRef = useRef(false);
   const [showLatestButton, setShowLatestButton] = useState(false);
   const healthFailures = useRef(0);
@@ -281,7 +293,9 @@ export function ProposalApp() {
   const [runtime, setRuntime] = useState<{ disk_free?: number; data_dir?: string; components?: { name: string; installed: boolean }[] }>({});
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const activeSessionKey = threadId || "__new__";
-  const activeSession = sessionStates[activeSessionKey] || { messages: INITIAL_MESSAGES, draft: "", job: null, busy: false, chatMode: "auto" as ChatMode };
+  const activeSession = sessionStates[activeSessionKey] || {
+    messages: INITIAL_MESSAGES, draft: "", job: null, busy: false, chatMode: "auto" as ChatMode, historyIndex: null, historyDraft: "",
+  };
   const messages = activeSession.messages;
   const question = activeSession.draft;
   const chatJob = activeSession.job;
@@ -290,12 +304,16 @@ export function ProposalApp() {
 
   function updateSession(key: string, update: Partial<SessionRuntime> | ((current: SessionRuntime) => SessionRuntime)) {
     setSessionStates((all) => {
-      const current = all[key] || { messages: INITIAL_MESSAGES, draft: "", job: null, busy: false, chatMode: "auto" as ChatMode };
+      const current = all[key] || {
+        messages: INITIAL_MESSAGES, draft: "", job: null, busy: false, chatMode: "auto" as ChatMode, historyIndex: null, historyDraft: "",
+      };
       return { ...all, [key]: typeof update === "function" ? update(current) : { ...current, ...update } };
     });
   }
 
-  function setQuestion(value: string) { updateSession(activeSessionKey, { draft: value }); }
+  function setQuestion(value: string) {
+    updateSession(activeSessionKey, { draft: value, historyIndex: null, historyDraft: "" });
+  }
 
   useEffect(() => { activeThreadRef.current = threadId; }, [threadId]);
   useEffect(() => { filterStateRef.current = { meetingId: meeting?.id, agendas: selectedAgendas, sources: selectedSources, search }; }, [meeting, selectedAgendas, selectedSources, search]);
@@ -400,7 +418,9 @@ export function ProposalApp() {
     try {
       const history = await api<Message[]>(`/api/chats/${thread.id}/messages`, { signal: controller.signal }, 2);
       if (messageRequestRef.current.sequence !== sequence) return;
-      updateSession(thread.id, (current) => ({ ...current, messages: history.length ? history : INITIAL_MESSAGES, error: undefined }));
+      updateSession(thread.id, (current) => ({
+        ...current, messages: history.length ? history : INITIAL_MESSAGES, error: undefined, historyIndex: null, historyDraft: "",
+      }));
       requestAnimationFrame(() => requestAnimationFrame(() => scrollToLatest(true)));
     } catch (error) {
       if (controller.signal.aborted) return;
@@ -640,7 +660,7 @@ export function ProposalApp() {
     const optimisticAssistantId = `pending-assistant-${clientRequestId}`;
     const sendMode = activeSession.nextMode || chatMode;
     updateSession(requestKey, (current) => ({
-      ...current, draft: "", busy: true, error: undefined, nextMode: undefined,
+      ...current, draft: "", busy: true, error: undefined, nextMode: undefined, historyIndex: null, historyDraft: "",
       messages: [...current.messages, { id: optimisticUserId, role: "user", content: asked }, { id: optimisticAssistantId, role: "assistant", content: "", status: "streaming" }],
       job: { id: "pending", kind: "chat", status: "queued", progress: 0, message: sendMode === "general" ? "正在组织回答…" : "正在判断问题类型…" },
     }));
@@ -777,6 +797,39 @@ export function ProposalApp() {
   }
 
   function handleChatKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+      const shouldNavigate = shouldNavigateRequestHistory({
+        key: event.key,
+        value: event.currentTarget.value,
+        selectionStart: event.currentTarget.selectionStart,
+        selectionEnd: event.currentTarget.selectionEnd,
+        historyActive: activeSession.historyIndex !== null,
+        isComposing: event.nativeEvent.isComposing,
+        altKey: event.altKey,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey,
+      });
+      if (!shouldNavigate) return;
+      const result = navigateRequestHistory(
+        extractRequestHistory(messages),
+        { index: activeSession.historyIndex, savedDraft: activeSession.historyDraft },
+        question,
+        event.key === "ArrowUp" ? "older" : "newer",
+      );
+      if (!result.handled) return;
+      event.preventDefault();
+      updateSession(activeSessionKey, {
+        draft: result.draft,
+        historyIndex: result.state.index,
+        historyDraft: result.state.savedDraft,
+      });
+      requestAnimationFrame(() => {
+        const input = chatInputRef.current;
+        if (input) input.setSelectionRange(input.value.length, input.value.length);
+      });
+      return;
+    }
     if (event.key !== "Enter" || event.altKey || event.nativeEvent.isComposing) return;
     event.preventDefault();
     if (!chatBusy && question.trim()) event.currentTarget.form?.requestSubmit();
@@ -784,7 +837,12 @@ export function ProposalApp() {
 
   async function retryChat() {
     if (!chatJob?.error) return;
-    updateSession(activeSessionKey, { job: null, draft: messages.filter((item) => item.role === "user").at(-1)?.content || "" });
+    updateSession(activeSessionKey, {
+      job: null,
+      draft: messages.filter((item) => item.role === "user").at(-1)?.content || "",
+      historyIndex: null,
+      historyDraft: "",
+    });
   }
 
   async function cancelActiveAnalysis() {
@@ -969,12 +1027,12 @@ export function ProposalApp() {
               </div>
               {chatJob && <div className={`chat-progress-dock ${chatJob.status}`}><div><strong>{chatJob.status === "failed" ? "请求处理失败" : (chatJob.message || "正在处理问题")}</strong><small>{chatJob.error ? userFacingError(chatJob.error) : `${Math.round(chatJob.progress * 100)}%${chatJob.updated_at ? ` · 最近活动 ${new Date(chatJob.updated_at).toLocaleTimeString()}` : ""}`}</small></div><div className="progress-track"><span style={{ width: `${Math.max(3, chatJob.progress * 100)}%` }} /></div>{!(["failed", "cancelled", "completed"].includes(chatJob.status)) && <button className="cancel-analysis" onClick={() => void cancelActiveAnalysis()}>终止分析</button>}{chatJob.status === "failed" && <><button className="secondary" onClick={() => void retryChat()}>重试</button><button className="dock-close" onClick={() => updateSession(activeSessionKey, { job: null })}>关闭</button></>}</div>}
               <div className="suggestions">
-                {["按公司总结主要观点", "按核心问题归纳各公司观点", "基于分析结果生成 Word / PowerPoint 报告"].map((item) => <button key={item} onClick={() => updateSession(activeSessionKey, { draft: item, nextMode: "proposal" })}>{item}</button>)}
+                {["按公司总结主要观点", "按核心问题归纳各公司观点", "基于分析结果生成 Word / PowerPoint 报告"].map((item) => <button key={item} onClick={() => updateSession(activeSessionKey, { draft: item, nextMode: "proposal", historyIndex: null, historyDraft: "" })}>{item}</button>)}
               </div>
               <form className="chat-form" onSubmit={askQuestion}>
-                <textarea value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={handleChatKeyDown} placeholder={selected.size ? "询问提案，或直接提出其他问题…" : "可以直接提问；涉及提案时请先选择范围"} />
+                <textarea ref={chatInputRef} value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={handleChatKeyDown} placeholder={selected.size ? "询问提案，或直接提出其他问题…" : "可以直接提问；涉及提案时请先选择范围"} />
                 <button className="primary send-button" aria-label="发送" disabled={!question.trim() || chatBusy || !meeting}><Send size={18} /></button>
-                <small className="chat-shortcut">Enter 发送，Option+Enter 换行</small>
+                <small className="chat-shortcut">Enter 发送，Option+Enter 换行；↑/↓ 浏览当前会话历史</small>
               </form>
               <div className="model-selector"><label>模式</label><select value={chatMode} onChange={(event) => updateSession(activeSessionKey, { chatMode: event.target.value as ChatMode })}><option value="auto">自动</option><option value="proposal">提案问答</option><option value="general">通用问答</option></select><label>模型</label><select value={modelOptionId} onChange={(event) => void changeModel(event.target.value)}><option value="" disabled>请选择已配置模型</option>{modelOptions.map((item) => <option key={item.id} value={item.id}>{item.deployment === "local" ? "本地 / " : "外部 / "}{item.label}</option>)}<option value="__configure__">配置新的大模型…</option></select></div>
               <div className="report-settings">
